@@ -1,0 +1,430 @@
+---
+title: "Shakhlo_Thesis: Study_1"
+author: "Shakhlo Nematova"
+date: '2023-03-29'
+output:
+  pdf_document: default
+  html_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown script for the analysis of the Study 1 data. This study examines the effect of age and language group (bilingual versus monolingual) on children's ability to use visual phonetic cues as compared to auditory only and temporal cues.
+
+#Import necessary packages
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+library(readr)
+library(readxl)
+library(tidyverse)
+library(tidyr)
+library(readr)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(devtools)
+library(purrr)
+library(jtools)
+library(ggpubr)
+library(stringr)
+library(reshape2)
+library(rstatix)
+library(lme4)
+library(sjPlot)
+library(rempsyc)
+library(emmeans)
+library(plyr)
+library(VGAM)
+```
+
+#Import dataset
+
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
+df1 = read_xlsx('/Users/shakhlonematova/Library/Mobile Documents/com~apple~CloudDocs/PhD/Projects/Dissertation/Analysis/dprime_2-28-23.xlsx')
+#str(df1)
+df1$age_group=as.factor(df1$age_group)
+
+#get rid of outliers in each modality
+Q1_ao <- quantile(df1$ao, .25, na.rm = T)
+Q3_ao <- quantile(df1$ao, .75, na.rm = T)
+IQR_ao <- IQR(df1$ao, na.rm = T)
+
+Q1_avfull <- quantile(df1$avfull, .25, na.rm = T)
+Q3_avfull <- quantile(df1$avfull, .75, na.rm = T)
+IQR_avfull <- IQR(df1$avfull, na.rm = T)
+
+Q1_avtemp <- quantile(df1$avtemp, .25, na.rm = T)
+Q3_avtemp <- quantile(df1$avtemp, .75, na.rm = T)
+IQR_avtemp <- IQR(df1$avtemp, na.rm = T)
+
+newdf1<- subset(df1, df1$ao> (Q1_ao - 1.5*IQR_ao) & df1$ao< (Q3_ao + 1.5*IQR_ao))
+newdf1<- subset(newdf1, newdf1$avfull> (Q1_avfull - 1.5*IQR_avfull) & newdf1$avfull< (Q3_avfull + 1.5*IQR_avfull))
+newdf1<- subset(newdf1, newdf1$avtemp> (Q1_avtemp - 1.5*IQR_avtemp) & newdf1$avtemp< (Q3_avtemp + 1.5*IQR_avtemp))
+
+#change from wide to long format
+df_reshaped<-melt(newdf1, id = c("subject","group","age", "age_group", "gender", "grade","ao_hit", "ao_fa", 
+                              "avfull_hit", "avfull_fa", "avtemp_hit", "avtemp_fa"),
+            measured = c("ao", "av_full", "av_temp"), variable.name = "modality", value.name="dscore")
+
+df_reshaped$age_group=as.factor(df_reshaped$age_group)
+
+
+df_reshaped$age_bin_3mo = round_any(df_reshaped$age,0.25)
+```
+
+## Descriptive stats and t-test
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+newdf1%>% group_by(group) %>%
+  dplyr::summarize(
+    count = n(),
+    mean_age = mean(age, na.rm = TRUE),
+    sd_age = sd(age, na.rm = TRUE),
+    sem_age= sd_age/sqrt(n()),
+    med_age = median(age),
+   min_age = min(age),
+   max_age = max(age))-> df1_age 
+nice_table(df1_age, width = .60)
+age_table <- nice_table(df1_age, width = .60)
+#save_as_docx(age_table, path = "/Users/shakhlonematova/Library/Mobile Documents/com~apple~CloudDocs/PhD/Projects/Dissertation/Study_1/Results/results/age_table_5-1-23.docx")
+
+newdf1%>% group_by(group,age_group) %>%
+  dplyr::summarize(
+    count = n(),
+    mean_ao = mean(ao, na.rm = TRUE),
+    sd_ao = sd(ao, na.rm = TRUE),
+    sem_ao= sd_ao/sqrt(n()), 
+    mean_avfull=mean(avfull, na.rm = TRUE), 
+    sd_avfull=sd(avfull, na.rm = TRUE), 
+    sem_avfull = sd_avfull/sqrt(n()),
+    mean_avtemp=mean(avtemp, na.rm = TRUE), 
+    sd_avtemp=sd(avtemp, na.rm = TRUE), 
+    sem_avtemp = sd_avtemp/sqrt(n())) -> df1_sum 
+
+my_table1 <- nice_table(df1_sum, width = .60)
+my_table1
+#save_as_docx(my_table1, path = "/Users/shakhlonematova/Library/Mobile Documents/com~apple~CloudDocs/PhD/Projects/Dissertation/Study_1
+             #/Results/results/descriptivestats_table_5-1-23.docx")
+
+
+stat.test <- df_reshaped %>%
+  group_by(group, age_group) %>%
+  t_test(dscore~modality) %>%
+  adjust_pvalue(method = "holm") %>%
+  add_significance()
+
+nice_table(stat.test, width = .60)
+my_table <- nice_table(stat.test, width = .60)
+# save_as_docx(my_table, path = "/Users/shakhlonematova/Library/Mobile Documents/com~apple~CloudDocs/PhD/Projects/Dissertation/Study_1/Results/results/ttest_table_5-1-23.docx")
+
+
+##plot the hit and fa rate
+# df0 = read_xlsx('/Users/shakhlonematova/Library/Mobile Documents/com~apple~CloudDocs/PhD/Projects/Dissertation/Analysis/hitFarates.xlsx')
+# df1_rate <- subset(df0, select = -c(ao_hit, avfull_hit, avtemp_hit, ao_fa,avfull_fa,  avtemp_fa))
+# df1_melt <-melt(df0, id = c("group", "subject"),
+#                measured = c("ao_hit", "avfull_hit","avtemp_hit", 
+#                             "ao_fa", "avfull_fa", "avtemp_fa"), variable.name = "measure", 
+#               value.name = "rate")
+# 
+# df1_sum.data <- df1_melt %>% group_by(group, measure) %>%
+#   summarise(rate=mean(rate, na.rm = TRUE))
+# 
+# df1_rate.plot <- ggplot(df1_melt, aes(x = group, y = rate, group=measure, color=group)) +
+#   geom_point(cex = 1.5, pch = 1.0,position = position_jitter(w = 0.1, h = 0))
+# df1_rate.plot
+# 
+# 
+# df1_rate.plot <- df1_rate.plot +
+#   stat_summary(fun.data = 'mean_se', geom = 'errorbar', width = 0.2)
+# #geom_point(data=df1_melt, aes(x=group, y=rate))#can use the sum.data data here
+# df1_rate.plot
+# 
+# 
+# df1_rate.plot <- df1_rate.plot + 
+#   #geom_text(data=Beh_df, label=gear_sum.data$Group, vjust = -8, size = 5) +
+#   facet_wrap(~ measure, labeller = labeller(measure = 
+#                                            c("ao_hit" = "Hit rate for AO",
+#                                              "avfull_hit" = "Hit rate for AV+",
+#                                              "avtemp_hit" = "Hit rate for AV-",
+#                                              "ao_fa" = "False alarm rate for AO",
+#                                              "avfull_fa" = "False alarm rate for AV+",
+#                                              "avtemp_fa" ="False alarm rate for AV-"))) 
+# 
+# 
+# df1_rate.plot <-df1_rate.plot +
+#   theme_pubr() + 
+#   labs(title = "",
+#        x = "",
+#        y = "Rate")
+# df1_rate.plot<-df1_rate.plot + scale_y_continuous (limits=c(0, 40), breaks = seq(0,40,2)) +theme_bw()
+# df1_rate.plot
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Descriptive Stats Plot
+```{r, warning=FALSE, echo=FALSE, message=FALSE} 
+
+
+# Calculate means and standard deviations
+means <- aggregate(dscore ~ age_group + group + modality, data = df_reshaped, FUN = mean)
+sd <- aggregate(dscore ~ age_group + group + modality, data = df_reshaped, FUN = sd)
+
+
+# Merge means and standard deviations into one data frame
+means_sd <- merge(means, sd, by = c("age_group", "group", "modality"))
+
+# Create the plot
+my_colors <- c("steelblue", "tan2")
+ggplot(means_sd, aes(x = age_group, y = dscore.x, fill = group)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = dscore.x - dscore.y, ymax = dscore.x + dscore.y),
+                position = position_dodge(width = 0.9), width = 0.2) +
+  facet_wrap(~modality, ncol = 3, labeller = labeller(modality = 
+                                          c("ao" = "AO",
+                                            "avfull" = "AV+",
+                                            "avtemp" = "AV-"))) +
+  labs(x = "Age Group", y = "Sensitivity (d') score", fill = "Group") +
+  scale_fill_manual(values = my_colors) +
+  theme_bw()
+
+
+# Calculate cell means and standard deviations
+# df2$dscoreCens <- pmin(df2$dscore,4)
+library(dplyr)
+summary_data <- df_reshaped %>%
+  group_by(age_group,  modality, group) %>%
+  dplyr::summarise(
+    Mean = mean(dscore),
+    SD = sd(dscore),
+    SEM= SD/sqrt(n())
+  ) %>%
+  ungroup()
+
+# Plot the data
+library(ggplot2)
+ggplot(summary_data, aes(x = age_group, y = Mean, color = group)) +
+  geom_line(aes(group = group)) +
+  geom_errorbar(aes(ymin = Mean - SEM, ymax = Mean + SEM), width = 0.2)+
+  facet_grid(. ~ modality, labeller = labeller(modality = 
+                                          c("ao" = "AO",
+                                            "avfull" = "AV+",
+                                            "avtemp" = "AV-"))) +
+  labs(x = "Age", y = "Sensitivity (d') score", fill = "Group") +
+  scale_fill_manual(values = my_colors) +
+  theme_bw()
+
+
+# Add statistical test p-values
+#stat.test <- stat.test %>% add_xy_position(x = "group")
+#myplot= myplot + stat_pvalue_manual(stat.test)
+
+
+
+```
+
+
+## Examine model fit
+```{r warning=FALSE, message=FALSE}
+df2<-df_reshaped
+df2$age_in_months <- round(df2$age*12)
+df2_ageAvg <- ddply(df2,.(age_in_months,modality,age_bin_3mo),summarise,
+                    atCeiling=mean(dscore>=4,na.rm=TRUE),
+                    dscore=mean(dscore,na.rm=TRUE))
+
+#plot without group
+ggplot(df_reshaped,aes(x=age,y=dscore,color=modality))+geom_point()+geom_smooth(method=lm)+facet_wrap(~modality, labeller = labeller(modality = c("ao" = "AO",
+                                "avfull" = "AV+",
+                                "avtemp" = "AV-"))) +theme_bw()
+
+#plot with group
+ggplot(df_reshaped, aes(x=age, y=dscore, color=group, fill=group)) +
+  geom_point() +
+  geom_smooth(method=lm) +
+  facet_wrap(~modality, labeller = labeller(modality = c("ao" = "AO",
+                                "avfull" = "AV+",
+                                "avtemp" = "AV-")))+theme_bw()
+```
+
+## Exploring residual-vs-fits
+
+*original data has a big residuals-vs-fits problem. Some larger fitted values are linearly related to their residuals, suggesting they are at ceiling in the observed data. (And the effect is NOT driven by age)*
+```{r warning=FALSE, message=FALSE}
+ggplot(df2_ageAvg,aes(x=age_bin_3mo,y=dscore,color=modality))+
+  geom_point()+
+  geom_smooth(method=lm)+facet_wrap(~modality)
+df2_model <- lmer(dscore~age_in_months*modality+(1|subject),df2)
+df2$residuals = residuals(df2_model)
+df2$fitted = fitted.values(df2_model)
+```
+
+
+*QQ plot not normal (the long horizontal groups on the right)*
+```{r warning=FALSE, message=FALSE}
+ggplot(df2,aes(sample=dscore,color=modality))+geom_qq_line()+geom_qq()
+```
+
+
+*residuals vs fits should be horizontal, but there are linearly related points in the top left*
+```{r warning=FALSE, message=FALSE}
+ggplot(df2,aes(x=fitted,y=residuals,color=modality,group=modality))+geom_point()+geom_smooth(method=lm)
+```
+
+
+*It's NOT due to age*
+```{r warning=FALSE, message=FALSE}
+ggplot(df2,aes(x=age_in_months,y=residuals,color=modality,group=modality))+geom_point()+geom_smooth(method=lm)
+```
+
+
+*averaged across subjects in 1-month bins of age, the residuals-vs-fits plots look MUCH better. I'm guessing there are some strange subjects who are skewing the residuals and they get averaged away in the binned data*
+```{r warning=FALSE, message=FALSE}
+ggplot(df2,aes(x=age_in_months,y=dscore,color=modality))+
+  geom_point()+geom_smooth(method=lm)+facet_wrap(~modality)+ggtitle('Not averaged')
+ggplot(df2_ageAvg,aes(x=age_in_months,y=dscore,color=modality))+
+  geom_point()+geom_smooth(method=lm)+facet_wrap(~modality)+ggtitle('Binned & Averaged')
+
+df2_ageAvg_model <- lm(dscore~age_in_months*modality,df2_ageAvg)
+df2_ageAvg$residuals = residuals(df2_ageAvg_model)
+df2_ageAvg$fitted = fitted.values(df2_ageAvg_model)
+```
+
+
+*QQ is a bit better*
+```{r warning=FALSE, message=FALSE}
+ggplot(df2_ageAvg,aes(sample=dscore,color=modality))+geom_qq_line()+geom_qq()
+```
+
+
+*Residuals vs. fits look good*
+```{r warning=FALSE, message=FALSE}
+ggplot(df2_ageAvg,aes(x=fitted,y=residuals,color=modality,group=modality))+geom_point()+geom_smooth(method=lm)
+```
+
+
+*and age vs. residuals still looks good*
+```{r warning=FALSE, message=FALSE}
+ggplot(df2_ageAvg,aes(x=age_in_months,y=residuals,color=modality,group=modality))+geom_point()+geom_smooth(method=lm)
+```
+
+
+*The d-score data are censored at about +4*
+```{r warning=FALSE, message=FALSE}
+labels <- c("AO", "AV+", "AV-")
+p1=ggplot(df2,aes(x=dscore,color=modality))+geom_histogram()+theme_bw()+scale_color_discrete(labels = labels)
+p2=ggplot(df2,aes(x=age,y=dscore>=4,color=modality))+geom_point()+facet_wrap(~modality, labeller = labeller(modality = c("ao" = "AO", "avfull" = "AV+", "avtemp" = "AV-")))+theme_bw()+scale_color_discrete(labels = labels)
+p3=ggplot(df2_ageAvg,aes(x=age_in_months,y=atCeiling,color=modality,group=modality))+geom_point()+scale_color_discrete(labels = labels)+theme_bw()
+p1
+p2
+p3
+
+# #figure <- ggarrange(p1, p2,
+#                     labels = c("A", "B"), common.legend = F, legend = "right",ncol = 2, nrow = 1)
+#figure
+```
+
+
+*Try to fix most of the points with.a transform*
+```{r warning=FALSE, message=FALSE}
+df2$dscoreT <- exp(1)-log(5-df2$dscore)
+ggplot(df2,aes(x=dscoreT,color=modality))+geom_histogram()
+df2_modelT <- lmer(dscoreT~age_in_months*modality+(1|subject),df2)
+df2$residuals = residuals(df2_modelT)
+df2$fitted = fitted.values(df2_modelT)
+# It doesn't help.
+ggplot(df2,aes(x=fitted,y=residuals,color=modality,group=modality))+geom_point()+geom_smooth(method=lm)
+```
+
+
+*Try to uncensor data along age*
+
+```{r, warning=FALSE, message=FALSE}
+library(VGAM)
+df2$dscoreCens <- pmin(df2$dscore,4)
+df2$modality=relevel(factor(df2$modality), ref = "ao")
+df2$group=relevel(factor(df2$group), ref = "M")
+df2_censorModel <- vglm(dscoreCens ~ age*modality, tobit(Lower=-4,Upper=4), data=df2)
+df2$residuals = residuals(df2_censorModel)[,1]
+df2$fitted = fitted.values(df2_censorModel)
+ggplot(df2,aes(x=residuals,color=modality))+geom_histogram()
+ggplot(df2,aes(x=fitted,y=residuals,color=modality,group=modality))+geom_point()+geom_smooth(method=lm)
+ggplot(df2,aes(x=age,y=residuals,color=modality,group=modality))+geom_point()+geom_smooth(method=lm)
+summary(df2_censorModel)
+
+#It works!
+ggplot(df2,aes(x=dscore,color=modality))+geom_histogram()+ggtitle('d score before uncensoring')+theme_bw()
+ggplot(df2,aes(x=residuals,color=modality))+geom_histogram()+ggtitle('d score after uncensoring')+theme_bw()
+
+# Now you can add group to the tobit model OR you can use the residuals in the 
+# updated model: lmer( residuals ~ age*modality*group+(1|subject) )
+# Just remember that age*modality probably isn't significant since you already 
+# residualized those predictors. (Unless they happen to interact with group!)
+```
+
+## Analysis with tobit model
+```{r, warning=FALSE, message=FALSE}
+#Reference level AV+ versus AO
+df2$modality=relevel(factor(df2$modality), ref = "ao")
+df2$group=relevel(factor(df2$group), ref = "M")
+av_vs_ao<- vglm(dscoreCens ~ age*modality*group, tobit(Lower=-4,Upper=4), data=df2)
+summary(av_vs_ao)
+
+#plot the significant outcome
+ggplot(df2, aes(x = age, y = dscoreCens, color = modality, shape = modality)) + 
+  geom_smooth(method = "lm", se = FALSE, size = 1.5) +
+  geom_point(size = 1.5, show.legend = FALSE) +
+  labs(x = "Age", y = "Sensitivity (d') score", color = "Modality") +
+  scale_color_manual(values = c("avfull" = "red", "ao" = "blue", "avtemp" = "green"),
+                     breaks = c("avfull", "ao", "avtemp"),
+                     labels = c("AV+", "AO", "AV-")) +
+  scale_shape_manual(values = c("avfull" = 16, "ao" = 17, "avtemp" = 18),
+                     breaks = c("avfull", "ao", "avtemp"),
+                     labels = c("AV+", "AO", "AV-")) +
+  theme_apa()
+
+#Reference level AV+ versus AV-
+df2$modality=relevel(factor(df2$modality), ref = "avtemp")
+av_vs_temp <- vglm(dscoreCens ~ age*modality*group, tobit(Lower=-4,Upper=4), data=df2)
+summary(av_vs_temp)
+
+
+
+# using censReg just for sanity check
+library(censReg)
+censModel = censReg(dscore ~ age_group*modality*group, data = df2, left = -4, right =4)
+summary(censModel)
+
+
+```
+## just exploring more...
+```{r, warning=FALSE}
+library(emmeans)
+fit1 <- lmer(dscore ~ modality*group*age_group+(1|subject), data = df2)
+summary(fit1)
+
+
+emmip(fit1, group ~ age_group|modality) +theme_bw()
+
+fit.emm <- emmeans(fit1, ~ modality* age_group* group)
+pairs(fit.emm, simple = list("modality", c("group", "age_group")))
+
+joint_tests(fit1)
+joint_tests(fit1, by = "age_group")
+
+joint_tests(fit1, by = "group")
+
+joint_tests(fit1, by = "modality")
+
+
+
+
+
+```
