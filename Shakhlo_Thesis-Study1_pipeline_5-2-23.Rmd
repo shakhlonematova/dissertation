@@ -1,7 +1,7 @@
 ---
 title: "Shakhlo_Thesis: Study_1"
 author: "Shakhlo Nematova"
-date: '2023-03-29'
+date: '2023-06-14'
 output:
   pdf_document: default
   html_document: default
@@ -15,7 +15,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## R Markdown
 
-This is an R Markdown script for the analysis of the Study 1 data. This study examines the effect of age and language group (bilingual versus monolingual) on children's ability to use visual phonetic cues as compared to auditory only and temporal cues.
+This is an R Markdown script for the analysis of the Study 1 data. This study examines the effect of age and language group (bilingual versus monolingual) on children's ability to use visual phonetic cues as compared to auditory-only and temporal cues.
 
 #Import necessary packages
 
@@ -41,47 +41,140 @@ library(rempsyc)
 library(emmeans)
 library(plyr)
 library(VGAM)
+library(survival)
 ```
 
-#Import dataset
+## Import dataset
 
-```{r, message=FALSE, echo=FALSE, warning=FALSE}
-df1 = read_xlsx('/Users/shakhlonematova/Library/Mobile Documents/com~apple~CloudDocs/PhD/Projects/Dissertation/Analysis/dprime_2-28-23.xlsx')
-#str(df1)
+```{r, message=FALSE}
+df1 <- read_excel("~/df_study1.xlsx")
+str(df1);
 df1$age_group=as.factor(df1$age_group)
+df1$grade=as.factor(df1$grade)
+df1$age_bin_3mo = round_any(df1$age,0.25)
+grade_order <- c("4yo", "5yo", "6yo", "1", "2", "3", "4")
+# Convert grade to factor with desired order
+df1$grade <- factor(df1$grade, levels = grade_order)
 
-#get rid of outliers in each modality
-Q1_ao <- quantile(df1$ao, .25, na.rm = T)
-Q3_ao <- quantile(df1$ao, .75, na.rm = T)
-IQR_ao <- IQR(df1$ao, na.rm = T)
 
-Q1_avfull <- quantile(df1$avfull, .25, na.rm = T)
-Q3_avfull <- quantile(df1$avfull, .75, na.rm = T)
-IQR_avfull <- IQR(df1$avfull, na.rm = T)
+```
 
-Q1_avtemp <- quantile(df1$avtemp, .25, na.rm = T)
-Q3_avtemp <- quantile(df1$avtemp, .75, na.rm = T)
-IQR_avtemp <- IQR(df1$avtemp, na.rm = T)
+## Calculate the covariates (ses and proficiency)
+```{r}
+# Calculate each family's social status, excluding NAs
 
-newdf1<- subset(df1, df1$ao> (Q1_ao - 1.5*IQR_ao) & df1$ao< (Q3_ao + 1.5*IQR_ao))
-newdf1<- subset(newdf1, newdf1$avfull> (Q1_avfull - 1.5*IQR_avfull) & newdf1$avfull< (Q3_avfull + 1.5*IQR_avfull))
-newdf1<- subset(newdf1, newdf1$avtemp> (Q1_avtemp - 1.5*IQR_avtemp) & newdf1$avtemp< (Q3_avtemp + 1.5*IQR_avtemp))
+ses_stat <- with(df1, ((mother_job * 5 + mother_edu * 3 + father_job * 5 + father_edu * 3) / 2), na.rm = TRUE)
 
-#change from wide to long format
-df_reshaped<-melt(newdf1, id = c("subject","group","age", "age_group", "gender", "grade","ao_hit", "ao_fa", 
-                              "avfull_hit", "avfull_fa", "avtemp_hit", "avtemp_fa"),
+
+# Create a new data frame with the calculated values
+calculated_df <- data.frame(subject = df1$subject, ses_stat)
+
+# Merge the calculated data frame with the original ses data frame using the 'subject' column
+df1 <- merge(df1, calculated_df, by = "subject", all.x = TRUE)
+
+
+#Calculate bilinguals language proficiency in Uz
+uz_prof <- with(df1,((sp_uz+und_uz)/2), na.rm = TRUE)
+rus_prof <- with(df1,((sp_rus+und_rus)/2), na.rm = TRUE)
+
+# Create a new data frame with the calculated values
+calculated_uz <- data.frame(subject = df1$subject, uz_prof)
+calculated_rus <- data.frame(subject = df1$subject, rus_prof)
+
+# Merge the calculated data frame with the original ses data frame using the 'subject' column
+df1 <- merge(df1, calculated_uz, by = "subject", all.x = TRUE)
+df1 <- merge(df1, calculated_rus, by = "subject", all.x = TRUE)
+
+
+library(openxlsx)
+
+
+
+## Remove outliers
+```{r, warning=FALSE}
+# Remove outliers using IQR function
+data <- df1
+
+# Specify the outcome variables
+outcome_vars <- c( "ao", "avfull", "avtemp")
+
+# Function to remove outliers using the IQR method
+remove_outliers <- function(x, threshold = 1.5) {
+  x <- as.numeric(as.character(x))  # Convert to numeric (handle non-numeric values)
+  q1 <- quantile(x, 0.25, na.rm = TRUE)
+  q3 <- quantile(x, 0.75, na.rm = TRUE)
+  iqr <- q3 - q1
+  lower_bound <- q1 - threshold * iqr
+  upper_bound <- q3 + threshold * iqr
+  outliers <- sum(x < lower_bound | x > upper_bound, na.rm = TRUE)
+  x[x < lower_bound | x > upper_bound] <- NA
+  return(list(data = x, outliers = outliers))
+}
+
+# Remove outliers from the specified outcome variables
+cleaned_data <- lapply(data[, outcome_vars], remove_outliers)
+
+
+# Display the count of removed observations for each outcome variable
+for (i in 1:length(outcome_vars)) {
+  cat("Removed", cleaned_data[[i]]$outliers, "outliers for", outcome_vars[i], "\n")
+}
+
+
+df_reshaped<-melt(data, id = c("subject","group","age", "age_group", "gender", "grade","ao_hit", "ao_fa", 
+                              "avfull_hit", "avfull_fa", "avtemp_hit", "avtemp_fa", "age_bin_3mo", "mother_edu", "father_edu",
+                              "mother_job", "father_job", "income","sp_uz", "sp_rus","und_uz","und_rus", "ses_stat",
+                              "uz_prof", "rus_prof"),
             measured = c("ao", "av_full", "av_temp"), variable.name = "modality", value.name="dscore")
 
-df_reshaped$age_group=as.factor(df_reshaped$age_group)
 
+## Compare age and gender between monolingual and bilingual groups
+```{r, message=FALSE, echo=FALSE, warning=FALSE}
 
-df_reshaped$age_bin_3mo = round_any(df_reshaped$age,0.25)
+# Subset the data for monolinguals and bilinguals, excluding NAs
+monolingual_data <- subset(df1, group == "M" & !is.na(age) & !is.na(gender))
+bilingual_data <- subset(df1, group == "B" & !is.na(age) & !is.na(gender))
+
+# Calculate means and standard deviations for age by group
+monolingual_age_mean <- round(mean(monolingual_data$age, na.rm = TRUE), 2)
+monolingual_age_sd <- round(sd(monolingual_data$age, na.rm = TRUE), 2)
+bilingual_age_mean <- round(mean(bilingual_data$age, na.rm = TRUE), 2)
+bilingual_age_sd <- round(sd(bilingual_data$age, na.rm = TRUE), 2)
+
+# Calculate proportions for gender by group, excluding NAs
+monolingual_gender_prop <- table(na.omit(monolingual_data$gender)) / sum(!is.na(monolingual_data$gender))
+bilingual_gender_prop <- table(na.omit(bilingual_data$gender)) / sum(!is.na(bilingual_data$gender))
+
+# Print the results
+cat("Comparison of Age and Gender between Monolinguals and Bilinguals\n")
+cat("Age:\n")
+cat("Monolinguals: Mean =", monolingual_age_mean, ", SD =", monolingual_age_sd, "\n")
+cat("Bilinguals: Mean =", bilingual_age_mean, ", SD =", bilingual_age_sd, "\n\n")
+
+cat("Gender:\n")
+cat("Monolinguals: Female =", monolingual_gender_prop[1], ", Male =", monolingual_gender_prop[2], "\n")
+cat("Bilinguals: Female =", bilingual_gender_prop[1], ", Male =", bilingual_gender_prop[2], "\n")
+
+# Perform t-test for age and chi-square test for gender between the groups
+age_test <- t.test(age ~ group, data = df1, na.action = na.exclude)
+gender_table <- table(df1$gender, df1$group)
+gender_test <- chisq.test(gender_table)
+
+# Print the chi-square test result
+cat("Chi-Square Test for Gender by Group:\n")
+cat("Chi-Square =", round(gender_test$statistic, 2), "\n")
+cat("p-value =", formatC(gender_test$p.value, digits = 2, format = "f"), "\n")
+
+# Print the results
+cat("Comparison of Age and Gender between Monolinguals and Bilinguals\n")
+cat("Age:", age_test$method, "(df =", age_test$parameter[["df"]], ") =", age_test$statistic, ", p =", age_test$p.value, "\n")
+cat("Gender:", gender_test$method, "(df =", gender_test$parameter[["df"]], ") =", gender_test$statistic, ", p =", gender_test$p.value, "\n")
 ```
 
 ## Descriptive stats and t-test
 
 ```{r, echo=FALSE, warning=FALSE, message=FALSE}
-newdf1%>% group_by(group) %>%
+data%>% group_by(group) %>%
   dplyr::summarize(
     count = n(),
     mean_age = mean(age, na.rm = TRUE),
@@ -94,7 +187,7 @@ nice_table(df1_age, width = .60)
 age_table <- nice_table(df1_age, width = .60)
 #save_as_docx(age_table, path = "/Users/shakhlonematova/Library/Mobile Documents/com~apple~CloudDocs/PhD/Projects/Dissertation/Study_1/Results/results/age_table_5-1-23.docx")
 
-newdf1%>% group_by(group,age_group) %>%
+data%>% group_by(group,age_group) %>%
   dplyr::summarize(
     count = n(),
     mean_ao = mean(ao, na.rm = TRUE),
@@ -109,13 +202,12 @@ newdf1%>% group_by(group,age_group) %>%
 
 my_table1 <- nice_table(df1_sum, width = .60)
 my_table1
-#save_as_docx(my_table1, path = "/Users/shakhlonematova/Library/Mobile Documents/com~apple~CloudDocs/PhD/Projects/Dissertation/Study_1
-             #/Results/results/descriptivestats_table_5-1-23.docx")
+save_as_docx(my_table1, path ="/Users/shakhlonematova/Library/Mobile Documents/com~apple~CloudDocs/PhD/Projects/Dissertation/Study_1/Results/results/descriptivestats_table_6-8-23.docx")
 
 
 stat.test <- df_reshaped %>%
-  group_by(group, age_group) %>%
-  t_test(dscore~modality) %>%
+  group_by(modality, age_group) %>%
+  t_test(dscore~group) %>%
   adjust_pvalue(method = "holm") %>%
   add_significance()
 
@@ -125,7 +217,7 @@ my_table <- nice_table(stat.test, width = .60)
 
 
 ##plot the hit and fa rate
-# df0 = read_xlsx('/Users/shakhlonematova/Library/Mobile Documents/com~apple~CloudDocs/PhD/Projects/Dissertation/Analysis/hitFarates.xlsx')
+# df0 = read_xlsx('~/hitFarates.xlsx')
 # df1_rate <- subset(df0, select = -c(ao_hit, avfull_hit, avtemp_hit, ao_fa,avfull_fa,  avtemp_fa))
 # df1_melt <-melt(df0, id = c("group", "subject"),
 #                measured = c("ao_hit", "avfull_hit","avtemp_hit", 
@@ -166,9 +258,7 @@ my_table <- nice_table(stat.test, width = .60)
 # df1_rate.plot
 
 
-```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
 
 ## Descriptive Stats Plot
 ```{r, warning=FALSE, echo=FALSE, message=FALSE} 
@@ -203,11 +293,12 @@ library(dplyr)
 summary_data <- df_reshaped %>%
   group_by(age_group,  modality, group) %>%
   dplyr::summarise(
-    Mean = mean(dscore),
-    SD = sd(dscore),
+    Mean = mean(dscore, na.rm = TRUE),
+    SD = sd(dscore, na.rm = TRUE),
     SEM= SD/sqrt(n())
   ) %>%
   ungroup()
+
 
 # Plot the data
 library(ggplot2)
@@ -228,13 +319,11 @@ ggplot(summary_data, aes(x = age_group, y = Mean, color = group)) +
 #myplot= myplot + stat_pvalue_manual(stat.test)
 
 
-
-```
-
-
 ## Examine model fit
 ```{r warning=FALSE, message=FALSE}
 df2<-df_reshaped
+df_complete <- df2[complete.cases(df2$dscoreCens, df2$age, df2$modality), ]
+df2<-df_complete 
 df2$age_in_months <- round(df2$age*12)
 df2_ageAvg <- ddply(df2,.(age_in_months,modality,age_bin_3mo),summarise,
                     atCeiling=mean(dscore>=4,na.rm=TRUE),
@@ -262,8 +351,9 @@ ggplot(df2_ageAvg,aes(x=age_bin_3mo,y=dscore,color=modality))+
   geom_point()+
   geom_smooth(method=lm)+facet_wrap(~modality)
 df2_model <- lmer(dscore~age_in_months*modality+(1|subject),df2)
-df2$residuals = residuals(df2_model)
-df2$fitted = fitted.values(df2_model)
+cc <- complete.cases(df2[ , c( 'age_in_months' ,  'modality' ,  'dscore') ] )
+df2$residuals[cc] = residuals(df2_model)
+df2$fitted [cc]= fitted.values(df2_model)
 ```
 
 
@@ -285,7 +375,7 @@ ggplot(df2,aes(x=age_in_months,y=residuals,color=modality,group=modality))+geom_
 ```
 
 
-*averaged across subjects in 1-month bins of age, the residuals-vs-fits plots look MUCH better. I'm guessing there are some strange subjects who are skewing the residuals and they get averaged away in the binned data*
+*averaged across subjects in 1-month bins of age, the residuals-vs-fits plots look MUCH better. It's possible that there are some strange subjects who are skewing the residuals and they get averaged away in the binned data*
 ```{r warning=FALSE, message=FALSE}
 ggplot(df2,aes(x=age_in_months,y=dscore,color=modality))+
   geom_point()+geom_smooth(method=lm)+facet_wrap(~modality)+ggtitle('Not averaged')
@@ -293,8 +383,9 @@ ggplot(df2_ageAvg,aes(x=age_in_months,y=dscore,color=modality))+
   geom_point()+geom_smooth(method=lm)+facet_wrap(~modality)+ggtitle('Binned & Averaged')
 
 df2_ageAvg_model <- lm(dscore~age_in_months*modality,df2_ageAvg)
-df2_ageAvg$residuals = residuals(df2_ageAvg_model)
-df2_ageAvg$fitted = fitted.values(df2_ageAvg_model)
+cc <- complete.cases(df2_ageAvg[ , c( 'age_in_months' , 'age_bin_3mo', 'modality' ,  'dscore', 'atCeiling') ] )
+df2_ageAvg$residuals[cc] = residuals(df2_ageAvg_model)
+df2_ageAvg$fitted[cc] = fitted.values(df2_ageAvg_model)
 ```
 
 
@@ -312,16 +403,17 @@ ggplot(df2_ageAvg,aes(x=fitted,y=residuals,color=modality,group=modality))+geom_
 
 *and age vs. residuals still looks good*
 ```{r warning=FALSE, message=FALSE}
-ggplot(df2_ageAvg,aes(x=age_in_months,y=residuals,color=modality,group=modality))+geom_point()+geom_smooth(method=lm)
+ggplot(df2_ageAvg,aes(x=age_in_months,y=residuals,color=modality,group=modality))+geom_point(na.rm = T)+geom_smooth(method=lm)
 ```
 
 
 *The d-score data are censored at about +4*
 ```{r warning=FALSE, message=FALSE}
 labels <- c("AO", "AV+", "AV-")
+
 p1=ggplot(df2,aes(x=dscore,color=modality))+geom_histogram()+theme_bw()+scale_color_discrete(labels = labels)
-p2=ggplot(df2,aes(x=age,y=dscore>=4,color=modality))+geom_point()+facet_wrap(~modality, labeller = labeller(modality = c("ao" = "AO", "avfull" = "AV+", "avtemp" = "AV-")))+theme_bw()+scale_color_discrete(labels = labels)
-p3=ggplot(df2_ageAvg,aes(x=age_in_months,y=atCeiling,color=modality,group=modality))+geom_point()+scale_color_discrete(labels = labels)+theme_bw()
+p2=ggplot(df2,aes(x=age,y=dscore>=4,color=modality))+geom_point(na.rm = T)+facet_wrap(~modality, labeller = labeller(modality = c("ao" = "AO", "avfull" = "AV+", "avtemp" = "AV-")))+theme_bw()+scale_color_discrete(labels = labels)
+p3=ggplot(df2_ageAvg,aes(x=age_in_months,y=atCeiling,color=modality,group=modality))+geom_point(na.rm = T)+scale_color_discrete(labels = labels)+theme_bw()
 p1
 p2
 p3
@@ -337,8 +429,9 @@ p3
 df2$dscoreT <- exp(1)-log(5-df2$dscore)
 ggplot(df2,aes(x=dscoreT,color=modality))+geom_histogram()
 df2_modelT <- lmer(dscoreT~age_in_months*modality+(1|subject),df2)
-df2$residuals = residuals(df2_modelT)
-df2$fitted = fitted.values(df2_modelT)
+cc <- complete.cases(df2[ , c( 'age_in_months' ,  'modality' , 'subject', 'dscore') ] )
+df2$residuals[cc]= residuals(df2_modelT)
+df2$fitted [cc]= fitted.values(df2_modelT)
 # It doesn't help.
 ggplot(df2,aes(x=fitted,y=residuals,color=modality,group=modality))+geom_point()+geom_smooth(method=lm)
 ```
@@ -347,21 +440,51 @@ ggplot(df2,aes(x=fitted,y=residuals,color=modality,group=modality))+geom_point()
 *Try to uncensor data along age*
 
 ```{r, warning=FALSE, message=FALSE}
-library(VGAM)
 df2$dscoreCens <- pmin(df2$dscore,4)
 df2$modality=relevel(factor(df2$modality), ref = "ao")
 df2$group=relevel(factor(df2$group), ref = "M")
 df2_censorModel <- vglm(dscoreCens ~ age*modality, tobit(Lower=-4,Upper=4), data=df2)
-df2$residuals = residuals(df2_censorModel)[,1]
-df2$fitted = fitted.values(df2_censorModel)
+cc <- complete.cases(df2[ , c( 'age' ,  'modality' , 'subject', 'dscoreCens', 'group') ] )
+df2$residuals [cc]= residuals(df2_censorModel)[,1]
+df2$fitted[cc] = fitted.values(df2_censorModel)
+
+
+# Plot the histogram
 ggplot(df2,aes(x=residuals,color=modality))+geom_histogram()
 ggplot(df2,aes(x=fitted,y=residuals,color=modality,group=modality))+geom_point()+geom_smooth(method=lm)
 ggplot(df2,aes(x=age,y=residuals,color=modality,group=modality))+geom_point()+geom_smooth(method=lm)
 summary(df2_censorModel)
 
+
 #It works!
-ggplot(df2,aes(x=dscore,color=modality))+geom_histogram()+ggtitle('d score before uncensoring')+theme_bw()
-ggplot(df2,aes(x=residuals,color=modality))+geom_histogram()+ggtitle('d score after uncensoring')+theme_bw()
+library(ggplot2)
+library(ggpubr)
+
+# Create separate histograms for each modality
+hst1 <- ggplot(df2, aes(x = dscore, color = modality)) +
+  geom_histogram() +
+  ggtitle('d score before uncensoring') +
+  
+  scale_color_discrete(labels = labels) +
+  facet_grid(. ~ modality, scales = "free")+theme_pubr()+theme(strip.text = element_blank())
+
+hst2 <- ggplot(df2, aes(x = residuals, color = modality)) +
+  geom_histogram() +
+  ggtitle('d score after uncensoring') +
+  
+  scale_color_discrete(labels = labels) +
+  facet_grid(. ~ modality, scales = "free")+theme_pubr()+theme(strip.text = element_blank())
+
+
+# Arrange the histograms in a single figure with separate panels for each modality
+figure <- ggarrange(hst1, hst2,
+                    labels = c("A", "B"),
+                    common.legend = TRUE,
+                    legend = "right",
+                    ncol = 1,
+                    nrow = 2)
+
+figure
 
 # Now you can add group to the tobit model OR you can use the residuals in the 
 # updated model: lmer( residuals ~ age*modality*group+(1|subject) )
@@ -372,13 +495,22 @@ ggplot(df2,aes(x=residuals,color=modality))+geom_histogram()+ggtitle('d score af
 ## Analysis with tobit model
 ```{r, warning=FALSE, message=FALSE}
 #Reference level AV+ versus AO
-df2$modality=relevel(factor(df2$modality), ref = "ao")
+df2$modality=relevel(factor(df2$modality), ref = "avfull")
 df2$group=relevel(factor(df2$group), ref = "M")
-av_vs_ao<- vglm(dscoreCens ~ age*modality*group, tobit(Lower=-4,Upper=4), data=df2)
+av_vs_ao<- vglm(dscoreCens ~ age*modality, tobit(Lower=-4,Upper=4), data=df2)
 summary(av_vs_ao)
+tab_model(censModel, file="UZ1_modeloutput.doc", show.se = TRUE,  string.est = "Estimate (SE)", show.ci = 0.95, string.ci = "Conf. Int (95%)", show.stat = TRUE, show.aic=T, show.p = T, p.style =  "numeric_stars", p.val = "kr", collapse.se = T, show.intercept = F)
+aic<-AIC(av_vs_ao)
+aic
 
-#plot the significant outcome
-ggplot(df2, aes(x = age, y = dscoreCens, color = modality, shape = modality)) + 
+
+with_cov <- vglm(dscoreCens ~ age * modality * group + ses_stat + gender + ifelse(group == "B", uz_prof, 0),  tobit(Lower = -4, Upper = 4), data = df2) #uz_prof or rus_prof
+summary(with_cov)
+AIC(with_cov)
+
+
+#plot the significant outcome of the main model
+ggplot(df2, aes(x = age, y = residuals, color = modality, shape = modality)) + 
   geom_smooth(method = "lm", se = FALSE, size = 1.5) +
   geom_point(size = 1.5, show.legend = FALSE) +
   labs(x = "Age", y = "Sensitivity (d') score", color = "Modality") +
@@ -390,41 +522,75 @@ ggplot(df2, aes(x = age, y = dscoreCens, color = modality, shape = modality)) +
                      labels = c("AV+", "AO", "AV-")) +
   theme_apa()
 
+
+# using censReg just for sanity check
+library(censReg)
+censModel = censReg(dscoreCens ~ age*modality*group, data = df2, left = -4, right =4)
+summary(censModel)
+
+
 #Reference level AV+ versus AV-
 df2$modality=relevel(factor(df2$modality), ref = "avtemp")
 av_vs_temp <- vglm(dscoreCens ~ age*modality*group, tobit(Lower=-4,Upper=4), data=df2)
 summary(av_vs_temp)
+```
+
+
+## Explore the quadratic fit
+```{r}
+df2$modality=relevel(factor(df2$modality), ref = "ao")
+df2$group=relevel(factor(df2$group), ref = "M")
+df2$age_squared <- df2$age^2  # Add a new column for age squared
+
+#with group
+av_vs_ao2 <- vglm(dscoreCens ~ age + age_squared + modality * group + age_squared * modality * group, tobit(Lower = -4, Upper = 4), data = df2)
+summary(av_vs_ao2)
+
+aic2<- AIC(av_vs_ao2)
+aic2
+#without group
+av_vs_ao2 <- vglm(dscoreCens ~ age + age_squared  + age_squared * modality, tobit(Lower = -4, Upper = 4), data = df2)
+summary(av_vs_ao2)
+
+#plot the interaction
+ggplot(df2, aes(x = age_squared, y = dscoreCens, color = modality)) +
+  geom_smooth(aes(group = modality), method = "lm", se = FALSE) +
+  geom_point(size = 1.5, show.legend = FALSE) +
+  labs(x = "Age Squared", y = "dscoreCens") +
+  scale_color_discrete(name = "Modality") +
+  theme_minimal()
+
+```
+
+
+## see if binned ages show any effect
+```{r}
+# Create age_group variable
+df2$age_group2 <- cut(df2$age,
+                     breaks = c(4, 6, Inf),
+                     labels = c("4-5", "6-10"),
+                     include.lowest = TRUE)
+
+# Convert age_group to a factor variable
+df2$age_group2 <- factor(df2$age_group2)
+
+# Fit the regression model
+av_vs_ao3 <- vglm(dscoreCens ~ age_group2 * modality * group,
+                 tobit(Lower = -4, Upper = 4),
+                 data = df2)
+summary(av_vs_ao3)
+
+
+#each age is one bin
+av_vs_ao4 <- vglm(dscoreCens ~ age_group * modality * group,
+                 tobit(Lower = -4, Upper = 4),
+                 data = df2)
+summary(av_vs_ao4)
 
 
 
-# using censReg just for sanity check
-library(censReg)
-censModel = censReg(dscore ~ age_group*modality*group, data = df2, left = -4, right =4)
-summary(censModel)
 
 
 ```
-## just exploring more...
-```{r, warning=FALSE}
-library(emmeans)
-fit1 <- lmer(dscore ~ modality*group*age_group+(1|subject), data = df2)
-summary(fit1)
 
 
-emmip(fit1, group ~ age_group|modality) +theme_bw()
-
-fit.emm <- emmeans(fit1, ~ modality* age_group* group)
-pairs(fit.emm, simple = list("modality", c("group", "age_group")))
-
-joint_tests(fit1)
-joint_tests(fit1, by = "age_group")
-
-joint_tests(fit1, by = "group")
-
-joint_tests(fit1, by = "modality")
-
-
-
-
-
-```
